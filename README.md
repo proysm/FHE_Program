@@ -14,13 +14,15 @@
 
 [3. 세 번째 아이디어](#3-세-번째-아이디어) 
 
+[구현](#-세-번째-아이디어-구현)
+
 <br>
 
 ## 💡 아이디어 (브레인스토밍) 
 
 > 주식투자를 배경으로한 동형암호 프로그램 제작 💰 💰 💰 
 
-<br>
+
 
 ### 1. 첫 번째 아이디어
 ```
@@ -77,7 +79,7 @@ CKKS 스킴은 실수와 복소수 연산을 지원하며, 부동 소수점 연�
 (두번째 아이디어를 아주 간단히 한) 모의 투자 대회 1등, 꼴등 찾기
 ```
 1. 모의 투자에 대회에 참가한 N명의 참가자들이 자신들의 수익률을 직접 입력한다. **(차이점)**
-2. 가장 높은 수익률과 가장 낮은 수익률을 공개한다.
+2. 가장 높은 수익률과 가장 낮은 수익률을 공개한다. + (추가) 모든 등수를 공개한다.
 3. 따라서 참가자들은 자신이 1등인지, 꼴등인지 혹은 어느 것도 아닌지 판단할 수 있다. 
 
 
@@ -85,3 +87,47 @@ CKKS 스킴은 실수와 복소수 연산을 지원하며, 부동 소수점 연�
 
 Microsoft SEAL은 빼기 연산을 지원하므로 비교 연산을 근사한다.
 
+<br>
+
+## 👾 세 번째 아이디어 구현 
+
+### 0. 키 유효성 테스트 함수
+```C++
+void test_key_validity(const SEALContext& context, const PublicKey& public_key, const SecretKey& secret_key);
+```
+-> 실행 결과
+```text
+Key test passed: 123.456 matches 123.456
+```
+
+
+### 1. 주식 수익률 암호화 (Encrypt)
+
+```C++
+void send_encrypted_data(const vector<double>& rates, const SEALContext& context, const PublicKey& public_key, vector<Ciphertext>& encrypted_rates);
+```
+-> 실행 결과
+```text
+Rate: 23.1 encoded and encrypted.
+Rate: -25 encoded and encrypted.
+Rate: 12.5 encoded and encrypted.
+Rate: -10.5 encoded and encrypted.
+Rate: 50 encoded and encrypted.
+Encrypted data prepared.
+```
+
+### 2. 암호화된 상태로 주식 데이터 계산 및 복호화 (handle_data)
+```C++
+void handle_data(vector<Ciphertext>& encrypted_rates, const SEALContext& context, const SecretKey& secret_key, const PublicKey& public_key);
+```
+-> 실행 결과
+```text
+Maximum value: 50
+Minimum value: -25
+Rankings:
+Rank 1: Participant 5 with return rate 50
+Rank 2: Participant 1 with return rate 23.1
+Rank 3: Participant 3 with return rate 12.5
+Rank 4: Participant 4 with return rate -10.5
+Rank 5: Participant 2 with return rate -25
+```

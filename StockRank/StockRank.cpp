@@ -6,7 +6,6 @@ using namespace seal;
 
 void send_encrypted_data(const vector<double>& rates, const SEALContext& context, const PublicKey& public_key, vector<Ciphertext>& encrypted_rates);
 void handle_data(vector<Ciphertext>& encrypted_rates, const SEALContext& context, const SecretKey& secret_key, const PublicKey& public_key);
-void decrypted_data();
 void test_key_validity(const SEALContext& context, const PublicKey& public_key, const SecretKey& secret_key);
 
 vector<double> rates = { 23.1, -25.0, 12.5, -10.5, 50.0 }; // 예제 수익률 데이터
