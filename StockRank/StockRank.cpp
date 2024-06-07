@@ -5,10 +5,10 @@ using namespace std;
 using namespace seal;
 
 void send_encrypted_data(const vector<double>& rates, const SEALContext& context, const PublicKey& public_key, vector<Ciphertext>& encrypted_rates);
-void handle_data(const vector<Ciphertext>& encrypted_rates, const SEALContext& context, const SecretKey& secret_key, const PublicKey& public_key);
+void handle_data(vector<Ciphertext>& encrypted_rates, const SEALContext& context, const SecretKey& secret_key, const PublicKey& public_key);
 void test_key_validity(const SEALContext& context, const PublicKey& public_key, const SecretKey& secret_key);
 
-vector<double> rates = { 0.1, 0.2, -0.05, 0.15, -0.1 }; // 예제 수익률 데이터
+vector<double> rates = { 0.1, 0.2, 0.3, 0.4, 0.5 }; // 예제 수익률 데이터
 
 int main() {
     cout << "Start StockRank Program" << endl;
@@ -17,7 +17,7 @@ int main() {
 
     size_t poly_modulus_degree = 16384; // Polynomial modulus degree
     params.set_poly_modulus_degree(poly_modulus_degree);
-    params.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {60, 50, 40, 50, 40, 60}));
+    params.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {60, 40, 40, 40, 40, 60}));
 
     SEALContext context(params);
     KeyGenerator keygen(context);
@@ -61,7 +61,7 @@ void send_encrypted_data(const vector<double>& rates, const SEALContext& context
     }
 }
 
-void handle_data(const vector<Ciphertext>& encrypted_rates, const SEALContext& context, const SecretKey& secret_key, const PublicKey& public_key) {
+void handle_data(vector<Ciphertext>& encrypted_rates, const SEALContext& context, const SecretKey& secret_key, const PublicKey& public_key) {
     try {
         Decryptor decryptor(context, secret_key);
         Evaluator evaluator(context);
@@ -75,34 +75,47 @@ void handle_data(const vector<Ciphertext>& encrypted_rates, const SEALContext& c
         // 최대값과 최소값 찾기
         Ciphertext max_encrypted = encrypted_rates[0];
         Ciphertext min_encrypted = encrypted_rates[0];
+        
+        int base_level = context.get_context_data(encrypted_rates[0].parms_id())->chain_index(); // 기준 레벨 설정
 
+
+        // encrypted_rates.size()
         for (size_t i = 1; i < encrypted_rates.size(); ++i) {
 
+            // 반복 시작 시 모든 암호문을 기준 레벨에 맞추고 스케일 조정
+            for (auto& rate : encrypted_rates) {
+                while (context.get_context_data(rate.parms_id())->chain_index() > base_level) {
+                    evaluator.rescale_to_next_inplace(rate);
+                    rate.scale() = scale;
+                }
+            }
+
             // 비교를 위한 차이 계산
-            // 두 암호문을 빼고 그 값을 새 암호문으로 저장
             Ciphertext diff_max, diff_min;
-            evaluator.sub(encrypted_rates[i], max_encrypted, diff_max); 
+            evaluator.sub(encrypted_rates[i], max_encrypted, diff_max);
             evaluator.sub(min_encrypted, encrypted_rates[i], diff_min);
 
-            // 텍스트의 모듈러스를 다음비트로 전환하고 그에 따라 메시지를 줄이면 결과가 원본 암호 텍스트에 저장됨.
-            evaluator.rescale_to_next_inplace(diff_max); 
-            evaluator.rescale_to_next_inplace(diff_min);
+            // 스케일 및 레벨 출력
+            cout << "Scale (diff_max): " << diff_max.scale() << endl;
+            cout << "Scale (diff_min): " << diff_min.scale() << endl;
+            cout << "Level (diff_max): " << context.get_context_data(diff_max.parms_id())->chain_index() << endl;
+            cout << "Level (diff_min): " << context.get_context_data(diff_min.parms_id())->chain_index() << endl;
 
-            diff_max.scale() = scale;
-            diff_min.scale() = scale;
+            // 연산 전 레벨 맞추기
             parms_id_type last_parms_id = diff_max.parms_id();
-
-            // 암호문의 모듈러스를 지정된 위치로 전환하고 결과를 원래 암호문에 저장 
             evaluator.mod_switch_to_inplace(max_encrypted, last_parms_id);
             evaluator.mod_switch_to_inplace(min_encrypted, last_parms_id);
+
+            cout << "Scale (max_encrypted): " << max_encrypted.scale() << endl;
+            cout << "Level (max_encrypted): " << context.get_context_data(max_encrypted.parms_id())->chain_index() << endl;
 
             if (max_encrypted.parms_id() != diff_max.parms_id() || min_encrypted.parms_id() != diff_min.parms_id()) {
                 throw runtime_error("Parameter mismatch after rescale and mod switch.");
             }
 
+            // 0 및 0.5 암호문 생성
             Plaintext plain_zero;
             encoder.encode(0.0, scale, plain_zero);
-
             Ciphertext zero_encrypted;
             Encryptor encryptor(context, public_key);
             encryptor.encrypt(plain_zero, zero_encrypted);
@@ -110,44 +123,64 @@ void handle_data(const vector<Ciphertext>& encrypted_rates, const SEALContext& c
 
             Plaintext plain_half;
             encoder.encode(0.5, scale, plain_half);
+            evaluator.mod_switch_to_inplace(plain_half, diff_max.parms_id());
 
-            parms_id_type diff_max_parms_id = diff_max.parms_id();
-            evaluator.mod_switch_to_inplace(plain_half, diff_max_parms_id);
-
+            // sign_diff_max 계산
             Ciphertext sign_diff_max;
-            evaluator.add_plain(diff_max, plain_half, sign_diff_max); // 암호문과 평문을 추가하고 그 결과를 새로운 암호문에 저장 
-            evaluator.rescale_to_next_inplace(sign_diff_max);
+            evaluator.add_plain(diff_max, plain_half, sign_diff_max);
             sign_diff_max.scale() = scale;
 
+            cout << "Scale after addition (sign_diff_max): " << sign_diff_max.scale() << endl;
+            cout << "Level after addition (sign_diff_max): " << context.get_context_data(sign_diff_max.parms_id())->chain_index() << endl;
+
+            // sign_diff_max와 encrypted_rates[i]의 레벨 맞추기
             evaluator.mod_switch_to_inplace(sign_diff_max, encrypted_rates[i].parms_id());
+            evaluator.mod_switch_to_inplace(encrypted_rates[i], sign_diff_max.parms_id());
+
+            // 곱셈 후 레벨과 스케일을 맞춤
             evaluator.multiply_inplace(sign_diff_max, encrypted_rates[i]);
             evaluator.relinearize_inplace(sign_diff_max, relin_keys);
             evaluator.rescale_to_next_inplace(sign_diff_max);
             sign_diff_max.scale() = scale;
 
-            parms_id_type sign_diff_max_parms_id = sign_diff_max.parms_id();
-            evaluator.mod_switch_to_inplace(max_encrypted, sign_diff_max_parms_id);
+            cout << "Scale after multiplication (sign_diff_max): " << sign_diff_max.scale() << endl;
+            cout << "Level after multiplication (sign_diff_max): " << context.get_context_data(sign_diff_max.parms_id())->chain_index() << endl;
+
+            // max_encrypted의 레벨과 스케일을 sign_diff_max에 맞춤
+            evaluator.mod_switch_to_inplace(max_encrypted, sign_diff_max.parms_id());
+            if (max_encrypted.scale() != sign_diff_max.scale()) {
+                max_encrypted.scale() = sign_diff_max.scale();
+            }
             evaluator.add_inplace(max_encrypted, sign_diff_max);
 
-            // Calculate sign_diff_min similarly
+            // sign_diff_min 계산
             evaluator.mod_switch_to_inplace(plain_half, diff_min.parms_id());
             Ciphertext sign_diff_min;
             evaluator.add_plain(diff_min, plain_half, sign_diff_min);
-            evaluator.rescale_to_next_inplace(sign_diff_min);
             sign_diff_min.scale() = scale;
 
             evaluator.mod_switch_to_inplace(sign_diff_min, encrypted_rates[i].parms_id());
+            evaluator.mod_switch_to_inplace(encrypted_rates[i], sign_diff_min.parms_id());
+
             evaluator.multiply_inplace(sign_diff_min, encrypted_rates[i]);
             evaluator.relinearize_inplace(sign_diff_min, relin_keys);
             evaluator.rescale_to_next_inplace(sign_diff_min);
             sign_diff_min.scale() = scale;
 
-            parms_id_type sign_diff_min_parms_id = sign_diff_min.parms_id();
-            evaluator.mod_switch_to_inplace(min_encrypted, sign_diff_min_parms_id);
+            cout << "Scale after multiplication (sign_diff_min): " << sign_diff_min.scale() << endl;
+            cout << "Level after multiplication (sign_diff_min): " << context.get_context_data(sign_diff_min.parms_id())->chain_index() << endl;
+
+            // min_encrypted의 레벨과 스케일을 sign_diff_min에 맞춤
+            evaluator.mod_switch_to_inplace(min_encrypted, sign_diff_min.parms_id());
+            if (min_encrypted.scale() != sign_diff_min.scale()) {
+                min_encrypted.scale() = sign_diff_min.scale();
+            }
             evaluator.add_inplace(min_encrypted, sign_diff_min);
+
+            base_level--;
         }
 
-        // 해독 시작 
+        // 해독 시작
         Plaintext plain_max_result, plain_min_result;
         decryptor.decrypt(max_encrypted, plain_max_result);
         decryptor.decrypt(min_encrypted, plain_min_result);
@@ -179,6 +212,8 @@ void handle_data(const vector<Ciphertext>& encrypted_rates, const SEALContext& c
         cerr << "Exception in handle_data: " << e.what() << endl;
     }
 }
+
+
 
 void test_key_validity(const SEALContext& context, const PublicKey& public_key, const SecretKey& secret_key) {
     Encryptor encryptor(context, public_key);
